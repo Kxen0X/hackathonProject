@@ -78,18 +78,23 @@ struct CreateAppResult {
 	bool success() const { return application_id != -1; }
 };
 
+struct RespondAppResult {
+	bool success = false;
+	std::string error_message;
+};
+
 namespace db {
-    std::string generatePasswordHash(const std::string& password);
-    bool verifyUserPassword(const std::string& password, const std::string& hashFromDB);
+	std::string generatePasswordHash(const std::string& password);
+	bool verifyUserPassword(const std::string& password, const std::string& hashFromDB);
 
-    std::string vectorToPgArray(const std::vector<std::string>& vec);
-    std::vector<std::string> pgArrayToVector(const std::string& pgArray);
+	std::string vectorToPgArray(const std::vector<std::string>& vec);
+	std::vector<std::string> pgArrayToVector(const std::string& pgArray);
 
-    AuthResult registerUser(pqxx::connection& conn, const RegisterRequest& req);
-    AuthResult loginUser(pqxx::connection& conn, const LoginRequest& req);
+	AuthResult registerUser(pqxx::connection& conn, const RegisterRequest& req);
+	AuthResult loginUser(pqxx::connection& conn, const LoginRequest& req);
 
-    int updateProfile(pqxx::connection& conn, int64_t user_id, const Profile& profile);
-    Profile getProfile(pqxx::connection& conn, int64_t user_id);
+	int updateProfile(pqxx::connection& conn, int64_t user_id, const Profile& profile);
+	Profile getProfile(pqxx::connection& conn, int64_t user_id);
 
 	std::vector<Hackathon> getAllHackathons(pqxx::connection& conn);
 
@@ -100,7 +105,7 @@ namespace db {
 	int countUserHackathons(pqxx::connection& conn, int64_t user_id);
 
 	int64_t createHackathon(pqxx::connection& conn, const std::string& name, const std::string& description, int mxTeamSize, int64_t creator_id); int64_t createTeam(pqxx::connection& conn, const Team& team, int max_allowed_team_size);
-	
+
 	std::vector<Vacancy> getHackathonVacancies(pqxx::connection& conn, int64_t hackathon_id);
 	std::vector<Profile> getTeamMembers(pqxx::connection& conn, int64_t team_id);
 	bool addTeamMember(pqxx::connection& conn, int64_t team_id, int64_t user_id);
@@ -109,4 +114,23 @@ namespace db {
 
 	CreateAppResult createApplication(pqxx::connection& conn, const Application& app);
 
+	RespondAppResult respondToApplication(pqxx::connection& conn, int64_t application_id, int64_t responding_user_id, bool accept);
+
+	std::vector<Application> getUserApplications(pqxx::connection& conn, int64_t user_id);
+
+	std::vector<Application> getTeamApplications(pqxx::connection& conn, int64_t team_id);
+
+	bool removeTeamMember(pqxx::connection& conn, int64_t team_id, int64_t user_id);
+
+	int64_t addVacancy(pqxx::connection& conn, int64_t team_id, const std::string& role, const std::string& description);
+
+	bool deleteVacancy(pqxx::connection& conn, int64_t team_id, int64_t vacancy_id);
+
+	bool transferTeamLeadership(pqxx::connection& conn, int64_t team_id, int64_t current_leader_id, int64_t new_leader_id);
+
+	bool updateTeam(pqxx::connection& conn, int64_t team_id, int64_t leader_id, const std::string& name, const std::string& description);
+
+	bool deleteTeam(pqxx::connection& conn, int64_t team_id, int64_t leader_id);
+
+	bool updateHackathon(pqxx::connection& conn, int64_t hackathon_id, int64_t requesting_user_id, bool is_admin, const std::string& title, const std::string& description, int max_team_size, bool is_active);
 }

@@ -69,7 +69,7 @@ add_executable(hackatonServer
     include/server.h 
     include/session.h
     include/database.h
-)
+ "include/db_pool.h")
 
 target_compile_definitions(hackatonServer PRIVATE ASIO_STANDALONE ASIO_HAS_OPENSSL)
 
@@ -89,4 +89,6 @@ target_link_libraries(hackatonServer PRIVATE
 
 if (MSVC)
     target_compile_options(hackatonServer PRIVATE /Zc:preprocessor /Zc:__cplusplus)
+   
+    add_compile_options(/utf-8)
 endif()

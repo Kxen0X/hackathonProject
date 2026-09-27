@@ -1,11 +1,16 @@
 #include "common.h"
 #include "session.h"
-
+#include "db_pool.h"
 class Server {
 public:
 
-	Server(int port) : port{ port }, strand{ asio::make_strand(ctx) }, acceptor { ctx, asio::ip::tcp::endpoint(asio::ip::tcp::v4(), port) } /*sslContext{ asio::ssl::context::tlsv13_server }*/{
-
+	Server(short port, ConnectionPool& dbPool)
+		: ctx(),
+		strand(asio::make_strand(ctx)),
+		acceptor(ctx, asio::ip::tcp::endpoint(asio::ip::tcp::v4(), port)),
+		dbPool(dbPool),
+		port(port) {
+		
 	}
 
 	bool Start() {
@@ -27,8 +32,7 @@ public:
 			for (;;) {
 				try {
 					auto connection = co_await acceptor.async_accept(strand, asio::use_awaitable);
-					//auto session = std::make_shared<Session>(std::move(connection), sslContext);
-					auto session = std::make_shared<Session>(std::move(connection), JWT_SECRET_KEY);
+					auto session = std::make_shared<Session>(std::move(connection), JWT_SECRET_KEY, dbPool);
 					std::cout << "CONNECTION SUCCESSFUL" << std::endl;
 					session->start();
 				}
@@ -63,5 +67,7 @@ private:
 	std::thread IO_contextThread;
 	asio::strand<asio::io_context::executor_type> strand;
 	asio::ip::tcp::acceptor acceptor;
+
+	ConnectionPool& dbPool;
 	//asio::ssl::context sslContext;
 };

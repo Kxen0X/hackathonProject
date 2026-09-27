@@ -7,7 +7,9 @@
 #include <memory>
 #include <ranges>
 #include <chrono>
-
+#include <queue>
+#include <mutex>
+#include <condition_variable>
 
 
 #include <asio.hpp>
@@ -23,3 +25,5 @@
 #include <nlohmann/json.hpp>
 
 #include <pqxx/pqxx>
+
+#include <sodium.h>

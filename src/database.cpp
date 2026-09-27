@@ -1,13 +1,10 @@
 #include "database.h"
-#include <sodium.h>
-#include <iostream>
 #include <sstream>
 #include <stdexcept>
-
+#include "common.h"
 namespace db {
 
     std::string generatePasswordHash(const std::string& password) {
-        if (sodium_init() < 0) throw std::runtime_error("libsodium init failed");
         char hashed_password[crypto_pwhash_STRBYTES];
         crypto_pwhash_str(
             hashed_password, password.c_str(), password.size(),
@@ -17,7 +14,7 @@ namespace db {
     }
 
     bool verifyUserPassword(const std::string& password, const std::string& hashFromDB) {
-        if (sodium_init() < 0) return false;
+        
         return crypto_pwhash_str_verify(hashFromDB.c_str(), password.c_str(), password.size()) == 0;
     }
 
@@ -210,25 +207,33 @@ namespace db {
         const std::string& required_team_role) {
 
         std::vector<Profile> candidates;
+        std::vector<int64_t> user_ids;
         try {
-            pqxx::work tx(conn);
+                {
 
-            pqxx::result rows = tx.exec_params(
-                "SELECT u.id "
-                "FROM users u "
-                "JOIN user_specialties us ON u.id = us.user_id "
-                "JOIN specialties s ON us.specialty_id = s.id "
-                "WHERE u.status = 'В поиске команды' AND s.name = $1",
-                required_team_role
-            );
 
-            for (const auto& row : rows) {
-                int64_t uid = row["id"].as<int64_t>();
-                Profile cp = getProfile(conn, uid);
-                if (cp.user_id != -1) {
-                    candidates.push_back(cp);
+                    pqxx::work tx(conn);
+
+                    pqxx::result rows = tx.exec_params(
+                        "SELECT u.id "
+                        "FROM users u "
+                        "JOIN user_specialties us ON u.id = us.user_id "
+                        "JOIN specialties s ON us.specialty_id = s.id "
+                        "WHERE u.status = 'В поиске команды' AND s.name = $1",
+                        required_team_role
+                    );
+                    for (const auto& row : rows) {
+                        user_ids.push_back(row["id"].as<int64_t>());
+                    }
+                    tx.commit();
                 }
-            }
+
+                for (int64_t uid : user_ids) {
+                    Profile cp = getProfile(conn, uid);
+                    if (cp.user_id != -1) {
+                        candidates.push_back(cp);
+                    }
+                }
         }
         catch (const std::exception& e) {
             std::cerr << "Database matching error: " << e.what() << std::endl;
@@ -352,7 +357,7 @@ namespace db {
                 "SELECT 1 FROM teams WHERE team_id = $1", app.team_id
             );
             if (teamCheck.empty()) {
-                return { -1, "User with given ID does not exist" };
+                return { -1, "Team with given ID does not exist" };
 
             }
 
@@ -409,6 +414,319 @@ namespace db {
         }
     }
 
+    bool db::removeTeamMember(pqxx::connection& conn, int64_t team_id, int64_t user_id) {
+        try {
+            pqxx::work tx(conn);
+
+            pqxx::result leaderCheck = tx.exec_params(
+                "SELECT leader_id FROM teams WHERE team_id = $1", team_id
+            );
+            if (!leaderCheck.empty() && leaderCheck[0]["leader_id"].as<int64_t>() == user_id) {
+                return false;
+            }
+
+            pqxx::result res = tx.exec_params(
+                "DELETE FROM team_members WHERE team_id = $1 AND user_id = $2",
+                team_id, user_id
+            );
+
+            tx.commit();
+            return res.affected_rows() > 0;
+        }
+        catch (const std::exception& e) {
+            std::cerr << "Database removeTeamMember error: " << e.what() << std::endl;
+            return false;
+        }
+    }
+
+    int64_t db::addVacancy(pqxx::connection& conn, int64_t team_id, const std::string& role, const std::string& description) {
+        try {
+            pqxx::work tx(conn);
+            pqxx::row row = tx.exec_params1(
+                "INSERT INTO vacancies (team_id, required_role, description, is_active) "
+                "VALUES ($1, $2, $3, TRUE) RETURNING vacancy_id",
+                team_id, role, description
+            );
+            tx.commit();
+            return row["vacancy_id"].as<int64_t>();
+        }
+        catch (const std::exception& e) {
+            std::cerr << "Database addVacancy error: " << e.what() << std::endl;
+            return -1;
+        }
+    }
+
+    bool db::deleteVacancy(pqxx::connection& conn, int64_t team_id, int64_t vacancy_id) {
+        try {
+            pqxx::work tx(conn);
+            pqxx::result res = tx.exec_params(
+                "DELETE FROM vacancies WHERE vacancy_id = $1 AND team_id = $2",
+                vacancy_id, team_id
+            );
+            tx.commit();
+            return res.affected_rows() > 0;
+        }
+        catch (const std::exception& e) {
+            std::cerr << "Database deleteVacancy error: " << e.what() << std::endl;
+            return false;
+        }
+    }
+
+
+    RespondAppResult db::respondToApplication(pqxx::connection& conn, int64_t application_id, int64_t responding_user_id, bool accept) {
+        try{
+            pqxx::work tx(conn);
+
+            pqxx::result appRes = tx.exec_params(
+                "SELECT team_id, user_id, vacancy_id, type, status FROM applications WHERE application_id = $1",
+                application_id
+            );
+
+            if (appRes.empty()) {
+                return { false, "Application not found" };
+            }
+
+            auto row = appRes[0];
+            int64_t team_id = row["team_id"].as<int64_t>();
+            int64_t candidate_id = row["user_id"].as<int64_t>();
+            int64_t vacancy_id = row["vacancy_id"].is_null() ? -1 : row["vacancy_id"].as<int64_t>();
+            std::string type = row["type"].as<std::string>();
+            std::string status = row["status"].as<std::string>();
+
+            if (status != "pending") {
+                return { false, "Application has already been processed" };
+            }
+
+            if (type == "request") {
+                pqxx::result leaderRes = tx.exec_params(
+                    "SELECT 1 FROM teams WHERE team_id = $1 AND leader_id = $2",
+                    team_id, responding_user_id
+                );
+                if (leaderRes.empty()) {
+                    return { false, "Only the team leader can respond to join requests" };
+                }
+            }
+            else if (type == "invite") {
+                if (responding_user_id != candidate_id) {
+                    return { false, "Only the invited user can respond to this invitation" };
+                }
+            }
+
+            if (!accept) {
+                tx.exec_params(
+                    "UPDATE applications SET status = 'rejected' WHERE application_id = $1",
+                    application_id
+                );
+                tx.commit();
+                return { true, "" };
+            }
+
+            pqxx::result limitCheck = tx.exec_params(
+                "SELECT "
+                "  (SELECT COUNT(*) FROM team_members WHERE team_id = $1) AS current_size, "
+                "  h.max_team_size "
+                "FROM teams t "
+                "LEFT JOIN hackathons h ON t.hackathon_id = h.id "
+                "WHERE t.team_id = $1",
+                team_id
+            );
+
+            if (!limitCheck.empty()) {
+                int current_size = limitCheck[0]["current_size"].as<int>();
+                if (!limitCheck[0]["max_team_size"].is_null()) {
+                    int max_size = limitCheck[0]["max_team_size"].as<int>();
+                    if (current_size >= max_size) {
+                        return { false, "Team size limit exceeded for this hackathon" };
+                    }
+                }
+            }
+            tx.exec_params(
+                "UPDATE applications SET status = 'accepted' WHERE application_id = $1",
+                application_id
+            );
+
+            tx.exec_params(
+                "INSERT INTO team_members (team_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+                team_id, candidate_id
+            );
+
+            if (vacancy_id != -1) {
+                tx.exec_params(
+                    "UPDATE vacancies SET is_active = FALSE WHERE vacancy_id = $1",
+                    vacancy_id
+                );
+            }
+
+            tx.commit();
+            return { true, "" };
+        }
+        catch (const std::exception& e) {
+            std::cerr << "Database respondToApplication error: " << e.what() << std::endl;
+            return { false, "Internal database error" };
+        }
+    }
+
+    std::vector<Application> db::getUserApplications(pqxx::connection& conn, int64_t user_id) {
+        std::vector<Application> apps;
+        try {
+            pqxx::work tx(conn);
+            pqxx::result res = tx.exec_params(
+                "SELECT application_id, team_id, user_id, vacancy_id, type, status, message "
+                "FROM applications WHERE user_id = $1 ORDER BY application_id DESC",
+                user_id
+            );
+
+            for (const auto& row : res) {
+                Application app;
+                app.application_id = row["application_id"].as<int64_t>();
+                app.team_id = row["team_id"].as<int64_t>();
+                app.user_id = row["user_id"].as<int64_t>();
+                app.vacancy_id = row["vacancy_id"].is_null() ? -1 : row["vacancy_id"].as<int64_t>();
+                app.type = row["type"].as<std::string>();
+                app.status = row["status"].as<std::string>();
+                app.message = row["message"].is_null() ? "" : row["message"].as<std::string>();
+                apps.push_back(app);
+            }
+        }
+        catch (const std::exception& e) {
+            std::cerr << "Database getUserApplications error: " << e.what() << std::endl;
+        }
+        return apps;
+    }
+
+    bool transferTeamLeadership(pqxx::connection& conn, int64_t team_id, int64_t current_leader_id, int64_t new_leader_id) {
+        try {
+            pqxx::work tx(conn);
+
+            pqxx::result check = tx.exec_params(
+                "SELECT leader_id FROM teams WHERE team_id = $1", team_id
+            );
+            if (check.empty() || check[0]["leader_id"].as<int64_t>() != current_leader_id) {
+                return false;
+            }
+
+            pqxx::result memberCheck = tx.exec_params(
+                "SELECT 1 FROM team_members WHERE team_id = $1 AND user_id = $2",
+                team_id, new_leader_id
+            );
+            if (memberCheck.empty()) {
+                return false;
+            }
+
+            tx.exec_params(
+                "UPDATE teams SET leader_id = $1 WHERE team_id = $2",
+                new_leader_id, team_id
+            );
+
+            tx.commit();
+            return true;
+        }
+        catch (const std::exception& e) {
+            std::cerr << "[DB Error] transferTeamLeadership: " << e.what() << std::endl;
+            return false;
+        }
+    }
+
+    bool updateTeam(pqxx::connection& conn, int64_t team_id, int64_t leader_id, const std::string& name, const std::string& description) {
+        try {
+            pqxx::work tx(conn);
+            pqxx::result res = tx.exec_params(
+                "UPDATE teams SET name = $1, description = $2 "
+                "WHERE team_id = $3 AND leader_id = $4",
+                name, description, team_id, leader_id
+            );
+            tx.commit();
+            return res.affected_rows() > 0;
+        }
+        catch (const std::exception& e) {
+            std::cerr << "[DB Error] updateTeam: " << e.what() << std::endl;
+            return false;
+        }
+    }
+
+    bool deleteTeam(pqxx::connection& conn, int64_t team_id, int64_t leader_id) {
+        try {
+            pqxx::work tx(conn);
+
+            pqxx::result check = tx.exec_params(
+                "SELECT 1 FROM teams WHERE team_id = $1 AND leader_id = $2",
+                team_id, leader_id
+            );
+            if (check.empty()) {
+                return false;
+            }
+
+            tx.exec_params("DELETE FROM applications WHERE team_id = $1", team_id);
+            tx.exec_params("DELETE FROM vacancies WHERE team_id = $1", team_id);
+            tx.exec_params("DELETE FROM team_members WHERE team_id = $1", team_id);
+            tx.exec_params("DELETE FROM teams WHERE team_id = $1", team_id);
+
+            tx.commit();
+            return true;
+        }
+        catch (const std::exception& e) {
+            std::cerr << "[DB Error] deleteTeam: " << e.what() << std::endl;
+            return false;
+        }
+    }
+
+    bool updateHackathon(pqxx::connection& conn, int64_t hackathon_id, int64_t requesting_user_id, bool is_admin, const std::string& title, const std::string& description, int max_team_size, bool is_active) {
+        try {
+            pqxx::work tx(conn);
+            pqxx::result res;
+
+            if (is_admin) {
+                res = tx.exec_params(
+                    "UPDATE hackathons SET name = $1, description = $2, max_team_size = $3, is_active = $4 "
+                    "WHERE id = $5",
+                    title, description, max_team_size, is_active, hackathon_id
+                );
+            }
+            else {
+                res = tx.exec_params(
+                    "UPDATE hackathons SET name = $1, description = $2, max_team_size = $3, is_active = $4 "
+                    "WHERE id = $5 AND creator_id = $6",
+                    title, description, max_team_size, is_active, hackathon_id, requesting_user_id
+                );
+            }
+
+            tx.commit();
+            return res.affected_rows() > 0;
+        }
+        catch (const std::exception& e) {
+            std::cerr << "[DB Error] updateHackathon: " << e.what() << std::endl;
+            return false;
+        }
+    }
+
+    std::vector<Application> db::getTeamApplications(pqxx::connection& conn, int64_t team_id) {
+        std::vector<Application> apps;
+        try {
+            pqxx::work tx(conn);
+            pqxx::result res = tx.exec_params(
+                "SELECT application_id, team_id, user_id, vacancy_id, type, status, message "
+                "FROM applications WHERE team_id = $1 ORDER BY application_id DESC",
+                team_id
+            );
+
+            for (const auto& row : res) {
+                Application app;
+                app.application_id = row["application_id"].as<int64_t>();
+                app.team_id = row["team_id"].as<int64_t>();
+                app.user_id = row["user_id"].as<int64_t>();
+                app.vacancy_id = row["vacancy_id"].is_null() ? -1 : row["vacancy_id"].as<int64_t>();
+                app.type = row["type"].as<std::string>();
+                app.status = row["status"].as<std::string>();
+                app.message = row["message"].is_null() ? "" : row["message"].as<std::string>();
+                apps.push_back(app);
+            }
+        }
+        catch (const std::exception& e) {
+            std::cerr << "Database getTeamApplications error: " << e.what() << std::endl;
+        }
+        return apps;
+    }
+
     std::vector<Vacancy> getHackathonVacancies(pqxx::connection& conn, int64_t hackathon_id) {
         std::vector<Vacancy> vacancies;
         try {
@@ -442,16 +760,23 @@ namespace db {
 
     std::vector<Profile> getTeamMembers(pqxx::connection& conn, int64_t team_id) {
         std::vector<Profile> members;
+        std::vector<int64_t> user_ids;
         try {
-            pqxx::work tx(conn);
+            {
+                pqxx::work tx(conn);
 
-            pqxx::result rows = tx.exec_params(
-                "SELECT user_id FROM team_members WHERE team_id = $1",
-                team_id
-            );
+                pqxx::result rows = tx.exec_params(
+                    "SELECT user_id FROM team_members WHERE team_id = $1",
+                    team_id
+                );
 
-            for (const auto& row : rows) {
-                int64_t uid = row["user_id"].as<int64_t>();
+                for (const auto& row : rows) {
+                    user_ids.push_back(row["user_id"].as<int64_t>());
+                }
+                tx.commit();
+            }
+
+            for (int64_t uid : user_ids) {
                 Profile memberProfile = getProfile(conn, uid);
                 if (memberProfile.user_id != -1) {
                     members.push_back(memberProfile);
