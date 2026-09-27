@@ -56,6 +56,8 @@ FetchContent_MakeAvailable(json)
 
 find_package(libpqxx CONFIG REQUIRED)
 
+find_package(unofficial-sodium CONFIG REQUIRED)
+
 find_path(ASIO_INC_DIR asio.hpp HINTS "${asio_SOURCE_DIR}/asio/include" "${asio_SOURCE_DIR}/include" "${asio_SOURCE_DIR}")
 
 find_package(Threads REQUIRED)
@@ -82,7 +84,7 @@ target_link_libraries(hackatonServer PRIVATE
     Threads::Threads
     nlohmann_json::nlohmann_json
     libpqxx::pqxx
-    libsodium::sodium
+    unofficial-sodium::sodium
 )
 
 if (MSVC)
