@@ -249,19 +249,30 @@ public:
 								{
 									auto conn = dbPool.acquire();
 									prof = db::getProfile(conn.get(), numeric_user_id);
-								
+
 									prof.course = data.value("course", prof.course);
 									prof.direction = data.value("direction", prof.direction);
 									prof.status = data.value("status", prof.status);
 									prof.username = data.value("username", prof.username);
 									prof.experience = data.value("experience", prof.experience);
-
+								}
+								{
+									auto conn = dbPool.acquire();
 									if (data.contains("team_roles")) {
-										prof.specialties = data["team_roles"].get<std::vector<std::string>>();
+										auto roles = data["team_roles"].get<std::vector<std::string>>();
+										if (!db::validateRoles(roles)) {
+											httpResponse = makeResponse(400, "Bad Request", "{\"error\":\"Invalid team role provided\"}");
+											co_await asio::async_write(socket, asio::buffer(httpResponse), asio::use_awaitable);
+											co_return;
+										}
+										prof.specialties = roles;
 									}
 									if (data.contains("skills")) {
 										prof.skills = data["skills"].get<std::vector<std::string>>();
 									}
+								}
+								{
+									auto conn = dbPool.acquire();
 									isSuccess = db::updateProfile(conn.get(), numeric_user_id, prof);
 								}
 								if (isSuccess) {
@@ -323,7 +334,11 @@ public:
 								std::string reqRole = bodyJson.value("required_role", "");
 
 								if (reqRole.empty()) {
-									httpResponse = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n[]";
+									httpResponse = makeResponse(200, "OK", "[]");
+								}
+								else if (!db::ALLOWED_ROLES.contains(reqRole)) {
+									std::string err = "{\"error\":\"Invalid required_role: " + reqRole + "\"}";
+									httpResponse = makeResponse(400, "Bad Request", err);
 								}
 								else {
 									std::vector<Profile> candidates;
@@ -435,6 +450,12 @@ public:
 									for (const auto& vJson : bodyJson["vacancies"]) {
 										Vacancy v;
 										v.required_role = vJson["required_role"].get<std::string>();
+										if (!db::ALLOWED_ROLES.contains(v.required_role)) {
+											std::string err = "{\"error\":\"Invalid role in vacancy: " + v.required_role + "\"}";
+											httpResponse = makeResponse(400, "Bad Request", err);
+											co_await asio::async_write(socket, asio::buffer(httpResponse), asio::use_awaitable);
+											co_return;
+										}
 										v.description = vJson.value("description", "");
 										v.is_active = vJson.value("is_active", true);
 										team.vacancies.push_back(v);
@@ -891,22 +912,31 @@ public:
 									else {
 										auto bodyJson = nlohmann::json::parse(body);
 										std::string req_role = bodyJson["required_role"].get<std::string>();
-										std::string desc = bodyJson.value("description", "");
-
-										int64_t vac_id = db::addVacancy(conn.get(), team_id, req_role, desc);
-										if (vac_id != -1) {
-											nlohmann::json resJson;
-											resJson["message"] = "Vacancy created successfully";
-											resJson["vacancy_id"] = vac_id;
-											std::string bodyStr = resJson.dump();
-											//httpResponse = "HTTP/1.1 201 Created\r\nContent-Type: application/json\r\nContent-Length: " + std::to_string(bodyStr.size()) + "\r\nConnection: close\r\n\r\n" + bodyStr;
-											httpResponse = makeResponse(201, "Created", bodyStr);
-
+										
+										if (!db::ALLOWED_ROLES.contains(req_role)) {
+											std::string err = "{\"error\":\"Invalid role: " + req_role + "\"}";
+											httpResponse = makeResponse(400, "Bad Request", err);
 										}
 										else {
-											std::string err = "{\"error\":\"Database error while creating vacancy\"}";
-											//httpResponse = "HTTP/1.1 500 Internal Server Error\r\nContent-Type: application/json\r\nContent-Length: " + std::to_string(err.size()) + "\r\nConnection: close\r\n\r\n" + err;
-											httpResponse = makeResponse(500, "Internal Server Error", err);
+
+
+											std::string desc = bodyJson.value("description", "");
+
+											int64_t vac_id = db::addVacancy(conn.get(), team_id, req_role, desc);
+											if (vac_id != -1) {
+												nlohmann::json resJson;
+												resJson["message"] = "Vacancy created successfully";
+												resJson["vacancy_id"] = vac_id;
+												std::string bodyStr = resJson.dump();
+												//httpResponse = "HTTP/1.1 201 Created\r\nContent-Type: application/json\r\nContent-Length: " + std::to_string(bodyStr.size()) + "\r\nConnection: close\r\n\r\n" + bodyStr;
+												httpResponse = makeResponse(201, "Created", bodyStr);
+
+											}
+											else {
+												std::string err = "{\"error\":\"Database error while creating vacancy\"}";
+												//httpResponse = "HTTP/1.1 500 Internal Server Error\r\nContent-Type: application/json\r\nContent-Length: " + std::to_string(err.size()) + "\r\nConnection: close\r\n\r\n" + err;
+												httpResponse = makeResponse(500, "Internal Server Error", err);
+											}
 										}
 									}
 								}

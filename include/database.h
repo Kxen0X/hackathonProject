@@ -1,7 +1,10 @@
 #pragma once
 #include <string>
 #include <vector>
+#include <set>
 #include <pqxx/pqxx>
+
+
 struct RegisterRequest {
 	std::string email;
 	std::string password;
@@ -84,6 +87,24 @@ struct RespondAppResult {
 };
 
 namespace db {
+
+	const std::set<std::string> ALLOWED_ROLES = {
+		"Frontend",
+		"Backend",
+		"Fullstack",
+		"Mobile Developer",
+		"ML Engineer",
+		"Data Scientist",
+		"Data Analyst",
+		"DevOps",
+		"UI/UX Designer",
+		"QA Engineer",
+		"Project Manager",
+		"Product Manager"
+	};
+
+	bool validateRoles(const std::vector<std::string>& roles);
+
 	std::string generatePasswordHash(const std::string& password);
 	bool verifyUserPassword(const std::string& password, const std::string& hashFromDB);
 

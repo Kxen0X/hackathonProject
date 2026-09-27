@@ -301,7 +301,10 @@ namespace db {
                 "INSERT INTO team_members (team_id, user_id) VALUES ($1, $2)",
                 new_team_id, team.leader_id
             );
-
+            tx.exec_params(
+                "UPDATE users SET status = 'В команде' WHERE id = $1",
+                team.leader_id
+            );
             for (const auto& vacancy : team.vacancies) {
                 tx.exec_params(
                     "INSERT INTO vacancies (team_id, required_role, description, is_active) "
@@ -326,6 +329,7 @@ namespace db {
         try {
             pqxx::work tx(conn);
             tx.exec_params("INSERT INTO team_members (team_id, user_id) VALUES ($1, $2)", team_id, user_id);
+            tx.exec_params("UPDATE users SET status = 'В команде' WHERE id = $1", user_id);
             tx.commit();
             return true;
         }
@@ -429,7 +433,15 @@ namespace db {
                 "DELETE FROM team_members WHERE team_id = $1 AND user_id = $2",
                 team_id, user_id
             );
-
+            pqxx::result checkOtherTeams = tx.exec_params(
+                "SELECT 1 FROM team_members WHERE user_id = $1", user_id
+            );
+            if (checkOtherTeams.empty()) {
+                tx.exec_params(
+                    "UPDATE users SET status = 'В поиске команды' WHERE id = $1",
+                    user_id
+                );
+            }
             tx.commit();
             return res.affected_rows() > 0;
         }
@@ -549,7 +561,15 @@ namespace db {
                 "INSERT INTO team_members (team_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
                 team_id, candidate_id
             );
-
+            tx.exec_params(
+                "UPDATE users SET status = 'В команде' WHERE id = $1",
+                candidate_id
+            );
+             tx.exec_params(
+                "UPDATE applications SET status = 'rejected' "
+                "WHERE user_id = $1 AND status = 'pending' AND application_id != $2",
+                candidate_id, application_id
+            );
             if (vacancy_id != -1) {
                 tx.exec_params(
                     "UPDATE vacancies SET is_active = FALSE WHERE vacancy_id = $1",
@@ -756,6 +776,16 @@ namespace db {
             std::cerr << "Database get hackathon vacancies error: " << e.what() << std::endl;
         }
         return vacancies;
+    }
+
+    bool validateRoles(const std::vector<std::string>& roles) {
+        for (const auto& r : roles) {
+            if (!ALLOWED_ROLES.contains(r)) {
+                return false;
+            }
+            return true;
+        }
+        return false;
     }
 
     std::vector<Profile> getTeamMembers(pqxx::connection& conn, int64_t team_id) {
