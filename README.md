@@ -2,7 +2,7 @@
 
 A C++23 HTTP/JSON backend prototype for finding hackathon teammates and managing teams. It combines coroutine-based network sessions with PostgreSQL storage, JWT authentication, and password hashing.
 
-The default branch is **`I`**. This repository contains the backend source; a frontend and database migration scripts are not included.
+The final backend snapshot from branch `I` is available in **`main`**. This repository contains the backend source; a frontend and database migration scripts are not included.
 
 ## Implemented areas
 
@@ -45,7 +45,7 @@ Network operations use coroutines. Database calls are synchronous, so they can b
 The existing configuration targets a Windows development environment. You need Visual Studio 2022 with C++23 support, Ninja, CMake, vcpkg, and a PostgreSQL instance. `CMakeLists.txt` declares CMake 3.15, but the version-3 presets require **CMake 3.21+**.
 
 ```sh
-git clone --branch I https://github.com/Kxen0X/hackathonProject.git
+git clone --branch main https://github.com/Kxen0X/hackathonProject.git
 cd hackathonProject
 ```
 
